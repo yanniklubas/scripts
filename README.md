@@ -7,5 +7,5 @@ Useful scripts and binaries
 Add this folder to your path:
 
 ```bash
-export PATH="$PATH:$HOME/.dotfiles/bin/"
+export PATH="$PATH:$HOME/.dotfiles/scripts/"
 ```
