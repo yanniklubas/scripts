@@ -1,67 +1,71 @@
 #!/usr/bin/env bash
-# NOTES:
-#  - Remember to make this file executable
-#
 
 set -euo pipefail
 
-__test_executable_cmd__() {
-	if [[ ! $# -eq 1 ]]; then
-		echo "[ERROR]: invalid number of arguments: \`$#\` (expected \`1\`)"
-		exit 1
+log_error() {
+	local msg="$1"
+
+	if [ -z "$TMUX" ]; then
+		printf "%s\n" "$msg" >&2
+	else
+		tmux display-message -d 5000 "$msg"
 	fi
-	if [[ -x $(command -v "$1") ]]; then
+
+}
+
+is_executable_installed() {
+	local cmd="$1"
+	if command -v "$cmd" >/dev/null; then
 		return 0
 	fi
 	return 1
 }
 
-__tmux_fzf_get_session__() {
-	cmd="tmux list-sessions -F \"#{session_name}\" 2>/dev/null | fzf --exit-0"
-	if __test_executable_cmd__ "bat"; then
-		cmd="${cmd} --preview='tmux_tree {} | bat --style plain'"
+select_directory_from_fzf() {
+	local root="$1"
+	local directories=("$root" "$root/dev" "$HOME/.dotfiles")
+	if is_executable_installed "fd"; then
+		fd --min-depth 1 --max-depth 1 --type directory . "${directories[@]}" | fzf --exit-0
+	elif is_executable_installed "find"; then
+		find "${directories[@]}" -mindepth 1 -maxdepth 1 -type d | fzf --exit-0
+	else
+		log_error "[ERROR:tmux-sessionizer]: neither \`fd\` nor \`find\` are executable"
+		return 1
 	fi
-	session=$(eval "$cmd")
-	echo "$session"
 }
 
-tms() {
-	local selected
-	WORKSPACE=$(tmux showenv -g WORKSPACE | cut -d "=" -f2 || echo "$WORKSPACE")
+switch_to() {
+	if [ -z "$TMUX" ]; then
+		tmux attach-session -t "$1"
+	else
+		tmux switch-client -t "$1"
+	fi
+}
+
+main() {
+	local selected=""
+	local workspace
+	workspace=$(tmux showenv -g WORKSPACE | cut -d "=" -f2 || echo "$PERSONAL_WORKSPACE")
 	if [[ $# -eq 1 ]]; then
 		# Use the provided argument as the selected directory
 		selected=$1
-		fzf
 	elif [[ $# -eq 0 ]]; then
-		# Determine `find` command
-		directories=("$HOME/.config" "$WORKSPACE" "$WORKSPACE/dev" "$HOME/dotfiles")
-		if __test_executable_cmd__ "fd"; then
-			# shellcheck disable=SC2207
-			IFS=$'\n' search=($(fd --min-depth 1 --max-depth 1 -t d . "${directories[@]}"))
-			selected=$(printf "%s\n" "${search[@]}" | fzf --exit-0)
-		elif __test_executable_cmd__ "find"; then
-			# shellcheck disable=SC2207
-			IFS=$'\n' search=($(find "${directories[@]}" -mindepth 1 -maxdepth 1 -type d))
-			selected=$(printf "%s\n" "${search[@]}" | fzf --exit-0)
-		else
-			echo "[ERROR]: neither \`fd\` nor \`find\` are executable"
-			exit 1
-		fi
-
-		# Exit the script if no directory is selected
-		if [[ -z "$selected" ]]; then
-			exit 0
-		fi
-
-		session_name=$(echo "$selected" | tr ".-" "__")
-		if ! tmux has-session -t="$session_name" 2>/dev/null; then
-			tmux new-session -ds "$session_name" -c "$selected"
-		fi
-
-		tmux switch-client -t "$session_name"
-	else
-		echo "[ERROR]: invalid number of arguments: \`$#\` (expected \`0\` or \`1\`)"
+		# Use fzf to select a directory
+		selected=$(select_directory_from_fzf "$workspace")
+		echo "$selected"
 	fi
+
+	# Exit the script if no directory is selected
+	if [[ -z "$selected" ]]; then
+		exit 0
+	fi
+
+	session_name=$(echo "$selected" | tr ".-:" "___")
+	if ! tmux has-session -t="$session_name" 2>/dev/null; then
+		tmux new-session -ds "$session_name" -c "$selected"
+	fi
+
+	switch_to "$session_name"
 }
 
-tms "$@"
+main "$@"
